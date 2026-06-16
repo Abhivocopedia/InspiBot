@@ -9,7 +9,7 @@
 const char* ssid     = "PipeBot";
 const char* password = "12345678";
 
-// ========== Camera with your UPDATED pin mapping ==========
+// ========== Camera with UPDATED pin mapping ==========
 OV7670 cam(OV7670::Mode::QQVGA_RGB565,
            // D0..D7
            19, 34, 15, 32, 33, 25, 26, 27,
@@ -36,37 +36,40 @@ void captureAndCompress() {
   cam.oneFrame();
   uint16_t* img = cam.frame();
   jpg_len = 0;
-  JPEGENCODE jpe;
+
+  JPEGENC::CODEC jpe;
   jpe.width  = cam.xres;
   jpe.height = cam.yres;
   jpe.bpp    = 16;
   jpe.format = JPEG_PIXEL_RGB565;
   jpe.pixels = (uint8_t*)img;
+
   jpg.open  = jpgOpen;
   jpg.close = jpgClose;
   jpg.write = jpgWrite;
-  jpg.encode(&jpe, 50);
+
+  jpg.encode(&jpe, 50);  // Quality = 50
 }
 
 // ========== Web server & WebSocket ==========
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 
-// ========== WebSocket event (from phone) ==========
+// ========== WebSocket event ==========
 void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
                AwsEventType type, void *arg, uint8_t *data, size_t len) {
   if (type == WS_EVT_DATA) {
-    String msg = String((char*)data);
-    // Move command: {"cmd":"move","x":...,"y":...}
+    String msg = String((char*)data).substring(0, len);
+
     if (msg.indexOf("\"move\"") >= 0) {
       float x = 0, y = 0;
       int ix = msg.indexOf("\"x\":"); if (ix >= 0) x = msg.substring(ix + 4).toFloat();
       int iy = msg.indexOf("\"y\":"); if (iy >= 0) y = msg.substring(iy + 4).toFloat();
-      int left  = constrain(y * 255 + x * 255, -255, 255);
-      int right = constrain(y * 255 - x * 255, -255, 255);
+
+      int left  = constrain((int)(y * 255 + x * 255), -255, 255);
+      int right = constrain((int)(y * 255 - x * 255), -255, 255);
       Serial2.printf("M %d %d\n", left, right);
     }
-    // Camera command: {"cmd":"camera","x":...}
     else if (msg.indexOf("\"camera\"") >= 0) {
       int ix = msg.indexOf("\"x\":");
       if (ix >= 0) {
@@ -75,30 +78,37 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         Serial2.printf("S %d\n", angle);
       }
     }
-    // LED command: {"cmd":"led","id":1,"state":1}
     else if (msg.indexOf("\"led\"") >= 0) {
-      int id = msg.substring(msg.indexOf("\"id\":") + 5).toInt();
-      int state = msg.substring(msg.indexOf("\"state\":") + 8).toInt();
-      if (id == 1) Serial2.printf("L1 %d\n", state);
-      if (id == 2) Serial2.printf("L2 %d\n", state);
+      int idIdx = msg.indexOf("\"id\":");
+      int stIdx = msg.indexOf("\"state\":");
+      if (idIdx >= 0 && stIdx >= 0) {
+        int id = msg.substring(idIdx + 5).toInt();
+        int state = msg.substring(stIdx + 8).toInt();
+        if (id == 1) Serial2.printf("L1 %d\n", state);
+        if (id == 2) Serial2.printf("L2 %d\n", state);
+      }
     }
   }
 }
 
-// ========== Read sensor data from Arduino ==========
+// ========== Read sensor data ==========
 String lastSensorJSON = "{}";
 unsigned long lastSensorRead = 0;
+
 void readArduinoSensors() {
   if (Serial2.available()) {
     String line = Serial2.readStringUntil('\n');
     line.trim();
     if (line.startsWith("T:")) {
-      int tIdx = line.indexOf('T'); int hIdx = line.indexOf('H');
-      int dIdx = line.indexOf('D'); int iIdx = line.indexOf('I');
-      String temp = line.substring(tIdx + 2, hIdx - 1);
-      String hum  = line.substring(hIdx + 2, dIdx - 1);
-      String dist = line.substring(dIdx + 2, iIdx - 1);
-      String ir   = line.substring(iIdx + 2);
+      int hIdx = line.indexOf('H');
+      int dIdx = line.indexOf('D');
+      int iIdx = line.indexOf('I');
+
+      String temp = line.substring(2, hIdx).trim();
+      String hum  = line.substring(hIdx + 2, dIdx).trim();
+      String dist = line.substring(dIdx + 2, iIdx).trim();
+      String ir   = line.substring(iIdx + 2).trim();
+
       lastSensorJSON = "{\"temp\":" + temp + ",\"hum\":" + hum +
                        ",\"dist\":" + dist + ",\"ir\":" + ir + "}";
     }
@@ -119,30 +129,24 @@ void setup() {
   Serial.begin(115200);
   Serial2.begin(115200, SERIAL_8N1, 16, 17);  // RX2=16, TX2=17
 
-  // SPIFFS
   if (!SPIFFS.begin(true)) {
     Serial.println("SPIFFS mount failed");
   }
 
-  // WiFi AP
   WiFi.softAP(ssid, password);
   Serial.print("AP IP: "); Serial.println(WiFi.softAPIP());
 
-  // Camera init
   if (cam.init()) {
     Serial.println("Camera OK");
   } else {
     Serial.println("Camera init failed – check wiring");
   }
 
-  // WebSocket
   ws.onEvent(onWsEvent);
   server.addHandler(&ws);
 
-  // Serve static files (the HTML page)
   server.serveStatic("/", SPIFFS, "/").setDefaultFile("index.html");
 
-  // MJPEG stream endpoint
   server.on("/stream", HTTP_GET, [](AsyncWebServerRequest *request){
     AsyncWebServerResponse *response = request->beginChunkedResponse(
       "multipart/x-mixed-replace; boundary=frame",
@@ -150,8 +154,10 @@ void setup() {
         static char header[120];
         captureAndCompress();
         if (jpg_len == 0) return 0;
+
         int headerLen = snprintf(header, sizeof(header),
           "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", jpg_len);
+
         if (headerLen + jpg_len <= maxLen) {
           memcpy(buffer, header, headerLen);
           memcpy(buffer + headerLen, jpg_buf, jpg_len);
