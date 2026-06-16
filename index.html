@@ -9,11 +9,15 @@
     #joystick { width: 200px; height: 200px; background: #ddd; border-radius: 50%; margin: 20px auto; position: relative; touch-action: none; }
     #stick { width: 60px; height: 60px; background: #555; border-radius: 50%; position: absolute; left: 70px; top: 70px; }
     .btn { padding: 10px 20px; margin: 5px; font-size: 16px; }
+    #status { color: red; font-weight: bold; margin-top: 10px; }
+    #reconnect { margin-top: 10px; padding: 8px 16px; }
   </style>
 </head>
 <body>
   <h2>PipeBot Controller</h2>
-  <img id="video" src="/stream">
+  <div id="status">Checking connection...</div>
+  <button id="reconnect" onclick="initConnection()">Reconnect</button>
+  <img id="video" src="" style="display:none">
 
   <div id="joystick">
     <div id="stick"></div>
@@ -32,14 +36,41 @@
   <pre id="sensors">{}</pre>
 
 <script>
+const ESP_IP = "192.168.4.1";
 let ws;
+
+function initConnection() {
+  document.getElementById("status").textContent = "Checking connection...";
+  fetch("http://" + ESP_IP + "/")
+    .then(resp => {
+      if (resp.ok) {
+        document.getElementById("status").textContent = "✅ Connected to PipeBot";
+        document.getElementById("video").src = "http://" + ESP_IP + "/stream";
+        document.getElementById("video").style.display = "block";
+        connectWS();
+      } else {
+        showError();
+      }
+    })
+    .catch(err => {
+      showError();
+    });
+}
+
+function showError() {
+  document.getElementById("status").textContent = 
+    "❌ PipeBot not reachable.\n\n➡ Please switch ON WiFi on your phone and connect to SSID 'PipeBot' with password '12345678'.\nThen press Reconnect.";
+}
+
 function connectWS() {
-  ws = new WebSocket("ws://" + location.host + "/ws");
+  ws = new WebSocket("ws://" + ESP_IP + "/ws");
+  ws.onopen = () => console.log("WebSocket connected");
   ws.onmessage = (evt) => {
     document.getElementById("sensors").textContent = evt.data;
   };
+  ws.onerror = () => showError();
+  ws.onclose = () => showError();
 }
-connectWS();
 
 // Joystick logic
 const joystick = document.getElementById("joystick");
@@ -84,6 +115,9 @@ function sendLed(id,state) {
     ws.send(JSON.stringify({cmd:"led",id:id,state:state}));
   }
 }
+
+// Start connection check
+initConnection();
 </script>
 </body>
 </html>
