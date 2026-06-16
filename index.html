@@ -9,7 +9,7 @@
     #joystick { width: 200px; height: 200px; background: #ddd; border-radius: 50%; margin: 20px auto; position: relative; touch-action: none; }
     #stick { width: 60px; height: 60px; background: #555; border-radius: 50%; position: absolute; left: 70px; top: 70px; }
     .btn { padding: 10px 20px; margin: 5px; font-size: 16px; }
-    #status { color: red; font-weight: bold; margin-top: 10px; }
+    #status { color: red; font-weight: bold; margin-top: 10px; white-space: pre-line; }
     #reconnect { margin-top: 10px; padding: 8px 16px; }
   </style>
 </head>
@@ -41,7 +41,7 @@ let ws;
 
 function initConnection() {
   document.getElementById("status").textContent = "Checking connection...";
-  fetch("http://" + ESP_IP + "/")
+  fetch("http://" + ESP_IP + "/sensors")
     .then(resp => {
       if (resp.ok) {
         document.getElementById("status").textContent = "✅ Connected to PipeBot";
