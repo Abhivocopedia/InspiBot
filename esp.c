@@ -6,7 +6,7 @@
 const char* ssid = "PipeBot";
 const char* password = "12345678";
 
-// ===== Camera Pins (ESP32-CAM AI Thinker) =====
+// ===== Camera Pins (AI Thinker ESP32-CAM) =====
 #define PWDN_GPIO_NUM    -1
 #define RESET_GPIO_NUM   -1
 #define XCLK_GPIO_NUM     0
@@ -26,25 +26,6 @@ const char* password = "12345678";
 #define PCLK_GPIO_NUM    22
 
 WebServer server(80);
-
-// ===== Serve index.html directly from flash =====
-const char INDEX_HTML[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>PipeBot Camera</title>
-  <style>
-    body { font-family: Arial; text-align: center; background: #f0f0f0; }
-    #video { width: 320px; height: 240px; border: 2px solid #333; margin: 10px auto; }
-  </style>
-</head>
-<body>
-  <h2>PipeBot Camera Stream</h2>
-  <img id="video" src="/stream">
-</body>
-</html>
-)rawliteral";
 
 // ===== MJPEG stream handler =====
 void handleStream() {
@@ -104,7 +85,6 @@ void setup() {
   Serial.println(WiFi.softAPIP());
 
   // Routes
-  server.on("/", [](){ server.send_P(200, "text/html", INDEX_HTML); });
   server.on("/stream", [](){ handleStream(); });
 
   server.begin();
