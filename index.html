@@ -2,122 +2,20 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>PipeBot Control</title>
+  <title>PipeBot OV7670 Camera</title>
   <style>
     body { font-family: Arial; text-align: center; background: #f0f0f0; }
     #video { width: 320px; height: 240px; border: 2px solid #333; margin: 10px auto; }
-    #joystick { width: 200px; height: 200px; background: #ddd; border-radius: 50%; margin: 20px auto; position: relative; touch-action: none; }
-    #stick { width: 60px; height: 60px; background: #555; border-radius: 50%; position: absolute; left: 70px; top: 70px; }
-    .btn { padding: 10px 20px; margin: 5px; font-size: 16px; }
-    #status { color: red; font-weight: bold; margin-top: 10px; white-space: pre-line; }
-    #reconnect { margin-top: 10px; padding: 8px 16px; }
+    #status { font-weight: bold; margin-top: 10px; }
   </style>
 </head>
 <body>
-  <h2>PipeBot Controller</h2>
-  <div id="status">Checking connection...</div>
-  <button id="reconnect" onclick="initConnection()">Reconnect</button>
-  <img id="video" src="" style="display:none">
+  <h2>PipeBot OV7670 Camera Stream</h2>
+  <div id="status">Connecting to PipeBot...</div>
+  <img id="video" src="http://192.168.4.1/stream">
 
-  <div id="joystick">
-    <div id="stick"></div>
-  </div>
-
-  <button class="btn" onclick="sendCamera(-0.5)">Camera Left</button>
-  <button class="btn" onclick="sendCamera(0)">Camera Center</button>
-  <button class="btn" onclick="sendCamera(0.5)">Camera Right</button>
-  <br>
-  <button class="btn" onclick="sendLed(1,1)">LED1 ON</button>
-  <button class="btn" onclick="sendLed(1,0)">LED1 OFF</button>
-  <button class="btn" onclick="sendLed(2,1)">LED2 ON</button>
-  <button class="btn" onclick="sendLed(2,0)">LED2 OFF</button>
-
-  <h3>Sensors</h3>
-  <pre id="sensors">{}</pre>
-
-<script>
-const ESP_IP = "192.168.4.1";
-let ws;
-
-function initConnection() {
-  document.getElementById("status").textContent = "Checking connection...";
-  fetch("http://" + ESP_IP + "/sensors")
-    .then(resp => {
-      if (resp.ok) {
-        document.getElementById("status").textContent = "✅ Connected to PipeBot";
-        document.getElementById("video").src = "http://" + ESP_IP + "/stream";
-        document.getElementById("video").style.display = "block";
-        connectWS();
-      } else {
-        showError();
-      }
-    })
-    .catch(err => {
-      showError();
-    });
-}
-
-function showError() {
-  document.getElementById("status").textContent = 
-    "❌ PipeBot not reachable.\n\n➡ Please switch ON WiFi on your phone and connect to SSID 'PipeBot' with password '12345678'.\nThen press Reconnect.";
-}
-
-function connectWS() {
-  ws = new WebSocket("ws://" + ESP_IP + "/ws");
-  ws.onopen = () => console.log("WebSocket connected");
-  ws.onmessage = (evt) => {
-    document.getElementById("sensors").textContent = evt.data;
-  };
-  ws.onerror = () => showError();
-  ws.onclose = () => showError();
-}
-
-// Joystick logic
-const joystick = document.getElementById("joystick");
-const stick = document.getElementById("stick");
-let joyCenter = {x:100,y:100};
-let joyActive = false;
-
-joystick.addEventListener("touchstart", e => { joyActive = true; });
-joystick.addEventListener("touchend", e => {
-  joyActive = false;
-  stick.style.left = "70px";
-  stick.style.top = "70px";
-  sendMove(0,0);
-});
-joystick.addEventListener("touchmove", e => {
-  if (!joyActive) return;
-  let rect = joystick.getBoundingClientRect();
-  let touch = e.touches[0];
-  let x = touch.clientX - rect.left;
-  let y = touch.clientY - rect.top;
-  let dx = (x - joyCenter.x)/100; // -1..1
-  let dy = (y - joyCenter.y)/100;
-  dx = Math.max(-1, Math.min(1, dx));
-  dy = Math.max(-1, Math.min(1, dy));
-  stick.style.left = (x-30)+"px";
-  stick.style.top = (y-30)+"px";
-  sendMove(dx, dy);
-});
-
-function sendMove(x,y) {
-  if (ws && ws.readyState===1) {
-    ws.send(JSON.stringify({cmd:"move",x:x,y:y}));
-  }
-}
-function sendCamera(x) {
-  if (ws && ws.readyState===1) {
-    ws.send(JSON.stringify({cmd:"camera",x:x}));
-  }
-}
-function sendLed(id,state) {
-  if (ws && ws.readyState===1) {
-    ws.send(JSON.stringify({cmd:"led",id:id,state:state}));
-  }
-}
-
-// Start connection check
-initConnection();
-</script>
+  <script>
+    document.getElementById("status").textContent = "✅ Connected to PipeBot WiFi";
+  </script>
 </body>
 </html>
