@@ -81,10 +81,19 @@ void readArduinoSensors() {
       int hIdx = line.indexOf('H');
       int dIdx = line.indexOf('D');
       int iIdx = line.indexOf('I');
-      String temp = line.substring(2, hIdx).trim();
-      String hum  = line.substring(hIdx + 2, dIdx).trim();
-      String dist = line.substring(dIdx + 2, iIdx).trim();
-      String ir   = line.substring(iIdx + 2).trim();
+
+      String temp = line.substring(2, hIdx);
+      temp.trim();
+
+      String hum  = line.substring(hIdx + 2, dIdx);
+      hum.trim();
+
+      String dist = line.substring(dIdx + 2, iIdx);
+      dist.trim();
+
+      String ir   = line.substring(iIdx + 2);
+      ir.trim();
+
       lastSensorJSON = "{\"temp\":" + temp + ",\"hum\":" + hum +
                        ",\"dist\":" + dist + ",\"ir\":" + ir + "}";
     }
