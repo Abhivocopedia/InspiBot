@@ -1,403 +1,89 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0, minimum-scale=1.0, viewport-fit=cover">
   <title>PipeBot Control</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background: #1a1a1a;
-      color: white;
-      font-family: Arial, sans-serif;
-      text-align: center;
-      overflow: hidden;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
-    h2 {
-      font-size: 1.5rem;
-      margin: 10px 0 5px;
-      color: #0f0;
-    }
-    #stream {
-      width: 100%;
-      max-width: 400px;
-      border: 2px solid #0f0;
-      border-radius: 8px;
-      margin-bottom: 5px;
-      flex-shrink: 0;
-    }
-    .sensors {
-      display: flex;
-      justify-content: space-around;
-      flex-wrap: wrap;
-      background: #333;
-      border-radius: 6px;
-      padding: 6px 10px;
-      margin: 0 10px 8px;
-      width: calc(100% - 20px);
-      max-width: 400px;
-    }
-    .sensors span { font-size: 0.85rem; }
-    .joystick-container {
-      display: flex;
-      justify-content: center;
-      gap: 40px;
-      margin: 10px 0;
-      flex-wrap: wrap;
-    }
-    .joystick-zone {
-      width: 130px;
-      height: 130px;
-      background: #2a2a2a;
-      border-radius: 50%;
-      border: 2px solid #555;
-    }
-    .buttons {
-      margin: 10px;
-      display: flex;
-      gap: 20px;
-    }
-    button {
-      padding: 12px 24px;
-      font-size: 1rem;
-      font-weight: bold;
-      border: none;
-      border-radius: 8px;
-      background: #444;
-      color: white;
-      cursor: pointer;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.5);
-    }
-    button:active { background: #0f0; color: #000; }
+    body { font-family: Arial; text-align: center; background: #f0f0f0; }
+    #video { width: 320px; height: 240px; border: 2px solid #333; margin: 10px auto; }
+    #joystick { width: 200px; height: 200px; background: #ddd; border-radius: 50%; margin: 20px auto; position: relative; touch-action: none; }
+    #stick { width: 60px; height: 60px; background: #555; border-radius: 50%; position: absolute; left: 70px; top: 70px; }
+    .btn { padding: 10px 20px; margin: 5px; font-size: 16px; }
   </style>
 </head>
 <body>
-  <h2>🤖 Pipe Inspection Bot</h2>
-  <!-- Camera stream from ESP32 MJPEG endpoint -->
-  <img id="stream" src="/stream" alt="Camera Stream" crossorigin="anonymous">
+  <h2>PipeBot Controller</h2>
+  <img id="video" src="/stream">
 
-  <!-- Sensor readouts (updated via WebSocket) -->
-  <div class="sensors">
-    <span>🌡️ <span id="temp">--</span>°C</span>
-    <span>💧 <span id="hum">--</span>%</span>
-    <span>📏 <span id="dist">--</span> cm</span>
-    <span>👁️ <span id="ir">--</span></span>
+  <div id="joystick">
+    <div id="stick"></div>
   </div>
 
-  <!-- Dual joysticks: left for movement, right for camera pan -->
-  <div class="joystick-container">
-    <div id="joystick_move" class="joystick-zone"></div>
-    <div id="joystick_cam" class="joystick-zone"></div>
-  </div>
+  <button class="btn" onclick="sendCamera(-0.5)">Camera Left</button>
+  <button class="btn" onclick="sendCamera(0)">Camera Center</button>
+  <button class="btn" onclick="sendCamera(0.5)">Camera Right</button>
+  <br>
+  <button class="btn" onclick="sendLed(1,1)">LED1 ON</button>
+  <button class="btn" onclick="sendLed(1,0)">LED1 OFF</button>
+  <button class="btn" onclick="sendLed(2,1)">LED2 ON</button>
+  <button class="btn" onclick="sendLed(2,0)">LED2 OFF</button>
 
-  <!-- LED control buttons -->
-  <div class="buttons">
-    <button onclick="toggleLED(1)">💡 LED 1</button>
-    <button onclick="toggleLED(2)">💡 LED 2</button>
-  </div>
+  <h3>Sensors</h3>
+  <pre id="sensors">{}</pre>
 
-  <!-- NippleJS library (virtual joystick) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.9.0/nipplejs.min.js"></script>
+<script>
+let ws;
+function connectWS() {
+  ws = new WebSocket("ws://" + location.host + "/ws");
+  ws.onmessage = (evt) => {
+    document.getElementById("sensors").textContent = evt.data;
+  };
+}
+connectWS();
 
-  <script>
-    // ===== WebSocket to ESP32 =====
-    // When phone is connected to PipeBot WiFi, the ESP32's IP is always 192.168.4.1
-    const ws = new WebSocket('ws://192.168.4.1/ws');
+// Joystick logic
+const joystick = document.getElementById("joystick");
+const stick = document.getElementById("stick");
+let joyCenter = {x:100,y:100};
+let joyActive = false;
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        document.getElementById('temp').textContent = data.temp || '--';
-        document.getElementById('hum').textContent  = data.hum  || '--';
-        document.getElementById('dist').textContent = data.dist || '--';
-        document.getElementById('ir').textContent   = (data.ir == 1) ? 'Clear' : 'Obj!';
-      } catch (e) {
-        console.error('JSON parse error:', e);
-      }
-    };
+joystick.addEventListener("touchstart", e => { joyActive = true; });
+joystick.addEventListener("touchend", e => {
+  joyActive = false;
+  stick.style.left = "70px";
+  stick.style.top = "70px";
+  sendMove(0,0);
+});
+joystick.addEventListener("touchmove", e => {
+  if (!joyActive) return;
+  let rect = joystick.getBoundingClientRect();
+  let touch = e.touches[0];
+  let x = touch.clientX - rect.left;
+  let y = touch.clientY - rect.top;
+  let dx = (x - joyCenter.x)/100; // -1..1
+  let dy = (y - joyCenter.y)/100;
+  dx = Math.max(-1, Math.min(1, dx));
+  dy = Math.max(-1, Math.min(1, dy));
+  stick.style.left = (x-30)+"px";
+  stick.style.top = (y-30)+"px";
+  sendMove(dx, dy);
+});
 
-    ws.onerror = () => console.log('WebSocket error');
-    ws.onclose = () => console.log('WebSocket closed');
-
-    // ===== Movement joystick (left) =====
-    const moveMgr = nipplejs.create({
-      zone: document.getElementById('joystick_move'),
-      mode: 'static',
-      position: { top: '50%', left: '50%' },
-      color: 'white',
-      size: 120
-    });
-
-    moveMgr.on('move', (evt, data) => {
-      // data.vector: x = left/right (-1..1), y = up/down (-1..1)
-      // We want forward = y positive, so invert y
-      const x = data.vector.x;
-      const y = -data.vector.y;  // forward = positive
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(`{"cmd":"move","x":${x.toFixed(2)},"y":${y.toFixed(2)}}`);
-      }
-    });
-
-    moveMgr.on('end', () => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send('{"cmd":"move","x":0,"y":0}');
-      }
-    });
-
-    // ===== Camera joystick (right) – horizontal only =====
-    const camMgr = nipplejs.create({
-      zone: document.getElementById('joystick_cam'),
-      mode: 'static',
-      position: { top: '50%', left: '50%' },
-      color: 'lightblue',
-      lockY: true,   // only horizontal movement
-      size: 120
-    });
-
-    camMgr.on('move', (evt, data) => {
-      const x = data.vector.x;
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(`{"cmd":"camera","x":${x.toFixed(2)}}`);
-      }
-    });
-
-    camMgr.on('end', () => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send('{"cmd":"camera","x":0}');
-      }
-    });
-
-    // ===== LED toggle buttons =====
-    let led1State = false;
-    let led2State = false;
-
-    function toggleLED(num) {
-      if (num === 1) {
-        led1State = !led1State;
-        sendLED(1, led1State);
-      } else if (num === 2) {
-        led2State = !led2State;
-        sendLED(2, led2State);
-      }
-    }
-
-    function sendLED(id, state) {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(`{"cmd":"led","id":${id},"state":${state ? 1 : 0}}`);
-      }
-    }
-
-    // ===== Prevent page scrolling when touching joysticks =====
-    document.querySelectorAll('.joystick-zone').forEach(zone => {
-      zone.addEventListener('touchstart', (e) => e.preventDefault());
-      zone.addEventListener('touchmove', (e) => e.preventDefault());
-      zone.addEventListener('touchend', (e) => e.preventDefault());
-    });
-  </script>
-</body>
-</html><!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0, minimum-scale=1.0, viewport-fit=cover">
-  <title>PipeBot Control</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background: #1a1a1a;
-      color: white;
-      font-family: Arial, sans-serif;
-      text-align: center;
-      overflow: hidden;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
-    h2 {
-      font-size: 1.5rem;
-      margin: 10px 0 5px;
-      color: #0f0;
-    }
-    #stream {
-      width: 100%;
-      max-width: 400px;
-      border: 2px solid #0f0;
-      border-radius: 8px;
-      margin-bottom: 5px;
-      flex-shrink: 0;
-    }
-    .sensors {
-      display: flex;
-      justify-content: space-around;
-      flex-wrap: wrap;
-      background: #333;
-      border-radius: 6px;
-      padding: 6px 10px;
-      margin: 0 10px 8px;
-      width: calc(100% - 20px);
-      max-width: 400px;
-    }
-    .sensors span { font-size: 0.85rem; }
-    .joystick-container {
-      display: flex;
-      justify-content: center;
-      gap: 40px;
-      margin: 10px 0;
-      flex-wrap: wrap;
-    }
-    .joystick-zone {
-      width: 130px;
-      height: 130px;
-      background: #2a2a2a;
-      border-radius: 50%;
-      border: 2px solid #555;
-    }
-    .buttons {
-      margin: 10px;
-      display: flex;
-      gap: 20px;
-    }
-    button {
-      padding: 12px 24px;
-      font-size: 1rem;
-      font-weight: bold;
-      border: none;
-      border-radius: 8px;
-      background: #444;
-      color: white;
-      cursor: pointer;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.5);
-    }
-    button:active { background: #0f0; color: #000; }
-  </style>
-</head>
-<body>
-  <h2>🤖 Pipe Inspection Bot</h2>
-  <!-- Camera stream from ESP32 MJPEG endpoint -->
-  <img id="stream" src="/stream" alt="Camera Stream" crossorigin="anonymous">
-
-  <!-- Sensor readouts (updated via WebSocket) -->
-  <div class="sensors">
-    <span>🌡️ <span id="temp">--</span>°C</span>
-    <span>💧 <span id="hum">--</span>%</span>
-    <span>📏 <span id="dist">--</span> cm</span>
-    <span>👁️ <span id="ir">--</span></span>
-  </div>
-
-  <!-- Dual joysticks: left for movement, right for camera pan -->
-  <div class="joystick-container">
-    <div id="joystick_move" class="joystick-zone"></div>
-    <div id="joystick_cam" class="joystick-zone"></div>
-  </div>
-
-  <!-- LED control buttons -->
-  <div class="buttons">
-    <button onclick="toggleLED(1)">💡 LED 1</button>
-    <button onclick="toggleLED(2)">💡 LED 2</button>
-  </div>
-
-  <!-- NippleJS library (virtual joystick) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.9.0/nipplejs.min.js"></script>
-
-  <script>
-    // ===== WebSocket to ESP32 =====
-    // When phone is connected to PipeBot WiFi, the ESP32's IP is always 192.168.4.1
-    const ws = new WebSocket('ws://192.168.4.1/ws');
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        document.getElementById('temp').textContent = data.temp || '--';
-        document.getElementById('hum').textContent  = data.hum  || '--';
-        document.getElementById('dist').textContent = data.dist || '--';
-        document.getElementById('ir').textContent   = (data.ir == 1) ? 'Clear' : 'Obj!';
-      } catch (e) {
-        console.error('JSON parse error:', e);
-      }
-    };
-
-    ws.onerror = () => console.log('WebSocket error');
-    ws.onclose = () => console.log('WebSocket closed');
-
-    // ===== Movement joystick (left) =====
-    const moveMgr = nipplejs.create({
-      zone: document.getElementById('joystick_move'),
-      mode: 'static',
-      position: { top: '50%', left: '50%' },
-      color: 'white',
-      size: 120
-    });
-
-    moveMgr.on('move', (evt, data) => {
-      // data.vector: x = left/right (-1..1), y = up/down (-1..1)
-      // We want forward = y positive, so invert y
-      const x = data.vector.x;
-      const y = -data.vector.y;  // forward = positive
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(`{"cmd":"move","x":${x.toFixed(2)},"y":${y.toFixed(2)}}`);
-      }
-    });
-
-    moveMgr.on('end', () => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send('{"cmd":"move","x":0,"y":0}');
-      }
-    });
-
-    // ===== Camera joystick (right) – horizontal only =====
-    const camMgr = nipplejs.create({
-      zone: document.getElementById('joystick_cam'),
-      mode: 'static',
-      position: { top: '50%', left: '50%' },
-      color: 'lightblue',
-      lockY: true,   // only horizontal movement
-      size: 120
-    });
-
-    camMgr.on('move', (evt, data) => {
-      const x = data.vector.x;
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(`{"cmd":"camera","x":${x.toFixed(2)}}`);
-      }
-    });
-
-    camMgr.on('end', () => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send('{"cmd":"camera","x":0}');
-      }
-    });
-
-    // ===== LED toggle buttons =====
-    let led1State = false;
-    let led2State = false;
-
-    function toggleLED(num) {
-      if (num === 1) {
-        led1State = !led1State;
-        sendLED(1, led1State);
-      } else if (num === 2) {
-        led2State = !led2State;
-        sendLED(2, led2State);
-      }
-    }
-
-    function sendLED(id, state) {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(`{"cmd":"led","id":${id},"state":${state ? 1 : 0}}`);
-      }
-    }
-
-    // ===== Prevent page scrolling when touching joysticks =====
-    document.querySelectorAll('.joystick-zone').forEach(zone => {
-      zone.addEventListener('touchstart', (e) => e.preventDefault());
-      zone.addEventListener('touchmove', (e) => e.preventDefault());
-      zone.addEventListener('touchend', (e) => e.preventDefault());
-    });
-  </script>
+function sendMove(x,y) {
+  if (ws && ws.readyState===1) {
+    ws.send(JSON.stringify({cmd:"move",x:x,y:y}));
+  }
+}
+function sendCamera(x) {
+  if (ws && ws.readyState===1) {
+    ws.send(JSON.stringify({cmd:"camera",x:x}));
+  }
+}
+function sendLed(id,state) {
+  if (ws && ws.readyState===1) {
+    ws.send(JSON.stringify({cmd:"led",id:id,state:state}));
+  }
+}
+</script>
 </body>
 </html>
