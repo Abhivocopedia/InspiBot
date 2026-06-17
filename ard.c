@@ -15,6 +15,8 @@ Servo camServo;
 
 #define LED_FRONT A0
 #define LED_REAR  A1
+#define LED_LEFT  A2    // New left LED
+#define LED_RIGHT A3    // New right LED
 
 // Motor driver
 #define IN1 7
@@ -35,8 +37,14 @@ void setup() {
   pinMode(IR_PIN, INPUT);
   pinMode(LED_FRONT, OUTPUT);
   pinMode(LED_REAR, OUTPUT);
-  digitalWrite(LED_FRONT, LOW);
-  digitalWrite(LED_REAR, LOW);
+  pinMode(LED_LEFT, OUTPUT);   // Initialize new LED pins
+  pinMode(LED_RIGHT, OUTPUT);  // Initialize new LED pins
+  
+  // Turn on all LEDs by default when Arduino gets power
+  digitalWrite(LED_FRONT, HIGH);
+  digitalWrite(LED_REAR, HIGH);
+  digitalWrite(LED_LEFT, HIGH);
+  digitalWrite(LED_RIGHT, HIGH);
 
   camServo.attach(SERVO_PIN);
   camServo.write(90);
@@ -72,6 +80,12 @@ void loop() {
     }
     else if (cmd.startsWith("L2 ")) {     // LED2 on/off
       digitalWrite(LED_REAR, cmd.substring(3).toInt() ? HIGH : LOW);
+    }
+    else if (cmd.startsWith("L3 ")) {     // LED3 on/off (left LED)
+      digitalWrite(LED_LEFT, cmd.substring(3).toInt() ? HIGH : LOW);
+    }
+    else if (cmd.startsWith("L4 ")) {     // LED4 on/off (right LED)
+      digitalWrite(LED_RIGHT, cmd.substring(3).toInt() ? HIGH : LOW);
     }
     else if (cmd == "?") {                // Request sensor data
       sendSensorData();
