@@ -1,14 +1,12 @@
 #include <WiFi.h>
-#include <DHT.h>
-#include <ESP32Servo.h>
 
 // ========== WiFi ==========
 const char* WIFI_SSID = "DongiBaba";
 const char* WIFI_PASS = "AbhI0703";
 
-// ========== UART to Arduino ==========
-#define ARDUINO_RX 16
-#define ARDUINO_TX 17
+// ========== UART to Arduino (custom HardwareSerial) ==========
+#define ARDUINO_RX 16   // GPIO16 -> Arduino TX (pin 1) via 1kΩ
+#define ARDUINO_TX 17   // GPIO17 -> Arduino RX (pin 0)
 HardwareSerial ArduinoSerial(2);   // use UART2
 
 WiFiServer server(80);
@@ -27,6 +25,7 @@ void processCommand(String cmd) {
   if (cmd.length() == 0) return;
   sendArduinoCommand(cmd);
 
+  // Servo‑linked LEDs
   if (cmd.startsWith("S ")) {
     int angle = cmd.substring(2).toInt();
     if (angle < 90) {
@@ -49,7 +48,7 @@ String getSensorJson() {
   return json;
 }
 
-// ==================== Sci‑Fi Dashboard (PROGMEM) ====================
+// ==================== Sci‑Fi Dashboard (PROGMEM) – unchanged ====================
 const char MAIN_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
