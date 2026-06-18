@@ -1,222 +1,635 @@
-/*
-   ESP32-CAM (AI-Thinker) – DongiBaba WiFi
-   Station mode with live camera viewer
-   Board: "AI Thinker ESP32-CAM"
-   Partition Scheme: "Huge APP"
-*/
-
-#include "esp_camera.h"
 #include <WiFi.h>
-#include <WebServer.h>
+#include <DHT.h>
+#include <ESP32Servo.h>
 
-// ==================== CAMERA PINS (AI-Thinker) ====================
-#define PWDN_GPIO_NUM     32
-#define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM      0
-#define SIOD_GPIO_NUM     26
-#define SIOC_GPIO_NUM     27
-
-#define Y9_GPIO_NUM       35
-#define Y8_GPIO_NUM       34
-#define Y7_GPIO_NUM       39
-#define Y6_GPIO_NUM       36
-#define Y5_GPIO_NUM       21
-#define Y4_GPIO_NUM       19
-#define Y3_GPIO_NUM       18
-#define Y2_GPIO_NUM        5
-
-#define VSYNC_GPIO_NUM    25
-#define HREF_GPIO_NUM     23
-#define PCLK_GPIO_NUM     22
-
-// ==================== WiFi ====================
+// ========== WiFi ==========
 const char* WIFI_SSID = "DongiBaba";
 const char* WIFI_PASS = "AbhI0703";
 
-WebServer server(80);
-bool cameraReady = false;
+// ========== UART to Arduino ==========
+#define ARDUINO_RX 16
+#define ARDUINO_TX 17
+HardwareSerial ArduinoSerial(2);   // use UART2
 
-// ==================== MJPEG Stream ====================
-void handleStream() {
-  if (!cameraReady) {
-    server.send(503, "text/plain", "Camera not available");
-    return;
-  }
-  WiFiClient client = server.client();
-  server.sendContent("HTTP/1.1 200 OK\r\n"
-                     "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n");
-  while (client.connected()) {
-    camera_fb_t * fb = esp_camera_fb_get();
-    if (!fb) {
-      Serial.println("Frame capture failed");
-      delay(100);
-      continue;
+WiFiServer server(80);
+
+// Latest sensor data from Arduino
+float latestTemp = 0, latestHum = 0, latestDist = 0;
+int latestIR = 0;
+
+// ==================== Command helpers ====================
+void sendArduinoCommand(String cmd) {
+  ArduinoSerial.println(cmd);
+}
+
+void processCommand(String cmd) {
+  cmd.trim();
+  if (cmd.length() == 0) return;
+  sendArduinoCommand(cmd);
+
+  if (cmd.startsWith("S ")) {
+    int angle = cmd.substring(2).toInt();
+    if (angle < 90) {
+      sendArduinoCommand("L3 1"); sendArduinoCommand("L4 0");
+    } else if (angle > 90) {
+      sendArduinoCommand("L4 1"); sendArduinoCommand("L3 0");
+    } else {
+      sendArduinoCommand("L3 0"); sendArduinoCommand("L4 0");
     }
-    server.sendContent("--frame\r\n");
-    server.sendContent("Content-Type: image/jpeg\r\n");
-    server.sendContent("Content-Length: " + String(fb->len) + "\r\n\r\n");
-    client.write(fb->buf, fb->len);
-    server.sendContent("\r\n");
-    esp_camera_fb_return(fb);
-    if (!client.connected()) break;
-    delay(30);
   }
 }
 
-// ==================== Snapshot ====================
-void handleCapture() {
-  if (!cameraReady) {
-    server.send(503, "text/plain", "Camera not available");
-    return;
-  }
-  camera_fb_t * fb = esp_camera_fb_get();
-  if (!fb) {
-    server.send(500, "text/plain", "Capture failed");
-    return;
-  }
-  server.sendHeader("Content-Type", "image/jpeg");
-  server.sendHeader("Content-Length", String(fb->len));
-  WiFiClient client = server.client();
-  client.write(fb->buf, fb->len);
-  esp_camera_fb_return(fb);
+String getSensorJson() {
+  String json = "{";
+  json += "\"temp\":" + String(latestTemp, 1) + ",";
+  json += "\"hum\":" + String(latestHum, 1) + ",";
+  json += "\"dist\":" + String(latestDist, 1) + ",";
+  json += "\"ir\":" + String(latestIR);
+  json += "}";
+  return json;
 }
 
-// ==================== Root Page ====================
-void handleRoot() {
-  String html = R"rawliteral(
+// ==================== Sci‑Fi Dashboard (PROGMEM) ====================
+const char MAIN_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ESP32 Camera Viewer</title>
-  <style>
-    body { font-family: sans-serif; text-align: center; background: #111; color: #eee; margin:0; padding:20px; }
-    h2 { color: #f39c12; }
-    img { max-width:100%; border:2px solid #444; border-radius:10px; }
-    button { margin:10px; padding:10px 20px; font-size:16px; background:#444; color:white; border:none; border-radius:6px; cursor:pointer; }
-    button:hover { background:#6272a4; }
-    .ip { background:#222; padding:8px 20px; display:inline-block; border-radius:6px; margin-bottom:20px; }
-    .error { color:#ff5555; font-weight:bold; }
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="theme-color" content="#0B0C10" />
+<title>BOT CONTROLLER // TheAPIcalypse</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap');
+
+:root{
+  --bg:#0B0C10;
+  --panel:#10171a;
+  --cyan:#45A29E;
+  --cyan-bright:#66FCF1;
+  --orange:#FF6F00;
+  --white:#FFFFFF;
+  --danger:#FF3B3B;
+  --safe:#3DFFA0;
+  --dim:#7c9b98;
+  --font-display:'Orbitron','Audiowide',sans-serif;
+  --font-body:'Rajdhani','Segoe UI',sans-serif;
+  --font-mono:'Share Tech Mono','Consolas',monospace;
+}
+
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{
+  margin:0;padding:0;width:100%;height:100%;
+  background:radial-gradient(ellipse at 50% -10%, rgba(69,162,158,0.10), transparent 60%) , var(--bg);
+  color:var(--white);
+  font-family:var(--font-body);
+  overflow:hidden;
+  -webkit-user-select:none;user-select:none;
+  touch-action:none;
+}
+button,input{font-family:inherit;}
+
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important;}
+}
+
+/* ---------- background grid ---------- */
+.grid-overlay{
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:
+    linear-gradient(rgba(69,162,158,0.14) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(69,162,158,0.14) 1px, transparent 1px);
+  background-size:42px 42px;
+  -webkit-mask-image:radial-gradient(ellipse at center, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.35) 70%, transparent 100%);
+  mask-image:radial-gradient(ellipse at center, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.35) 70%, transparent 100%);
+  animation:gridDrift 18s linear infinite;
+}
+@keyframes gridDrift{ from{background-position:0 0;} to{background-position:42px 42px;} }
+
+/* ---------- app shell / screens ---------- */
+#app{position:relative;z-index:1;width:100%;height:100vh;}
+.screen{
+  position:absolute;inset:0;
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;visibility:hidden;pointer-events:none;
+  transform:translateY(14px);
+  transition:opacity .5s ease, transform .5s ease, visibility .5s;
+}
+.screen.active{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0);position:relative;}
+
+a{color:var(--cyan-bright);}
+
+/* ---------- shared chamfered panel motif ---------- */
+.chamfer{
+  clip-path:polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+}
+
+/* ---------- buttons ---------- */
+.btn-primary{
+  font-family:var(--font-display);
+  font-size:13px;letter-spacing:2.5px;text-transform:uppercase;
+  color:var(--cyan-bright);
+  background:linear-gradient(180deg, rgba(69,162,158,0.18), rgba(11,12,16,0.5));
+  border:1px solid var(--cyan-bright);
+  padding:16px 40px;
+  cursor:pointer;
+  filter:drop-shadow(0 0 6px rgba(102,252,241,.35));
+  transition:filter .2s ease, color .2s ease, transform .12s ease;
+}
+.btn-primary:hover{color:#fff;filter:drop-shadow(0 0 16px rgba(102,252,241,.65));}
+.btn-primary:active{transform:scale(.95);filter:drop-shadow(0 0 26px rgba(102,252,241,.9));}
+.btn-primary:focus-visible{outline:2px solid var(--cyan-bright);outline-offset:4px;}
+
+/* ====================================================== */
+/* LANDING                                                  */
+/* ====================================================== */
+.landing-inner{display:flex;flex-direction:column;align-items:center;gap:6px;padding:20px;}
+.logo-svg{width:clamp(90px,16vmin,140px);height:clamp(90px,16vmin,140px);animation:pulseGlow 3s ease-in-out infinite;}
+@keyframes pulseGlow{
+  0%,100%{filter:drop-shadow(0 0 8px rgba(102,252,241,.55));}
+  50%{filter:drop-shadow(0 0 24px rgba(102,252,241,.95));}
+}
+.title{
+  font-family:var(--font-display);font-weight:900;
+  font-size:clamp(28px,5.5vmin,46px);
+  letter-spacing:6px;margin:18px 0 4px;
+  color:var(--white);
+  text-shadow:0 0 12px rgba(102,252,241,.6), 0 0 30px rgba(69,162,158,.4);
+}
+.subtitle{
+  font-size:clamp(12px,2.2vmin,16px);letter-spacing:4px;text-transform:uppercase;
+  color:var(--dim);margin:0 0 26px;
+}
+.credit{
+  margin-top:22px;font-size:11px;letter-spacing:2px;text-transform:uppercase;
+  color:var(--dim);opacity:.7;font-family:var(--font-mono);
+}
+
+/* ====================================================== */
+/* CONNECT                                                  */
+/* ====================================================== */
+.connect-card{
+  background:linear-gradient(180deg, rgba(69,162,158,0.08), rgba(16,23,26,0.6));
+  border:1px solid rgba(102,252,241,0.4);
+  padding:38px 42px;display:flex;flex-direction:column;align-items:center;
+  max-width:380px;width:88vw;
+  filter:drop-shadow(0 0 18px rgba(69,162,158,.18));
+}
+.wifi-icon{width:64px;height:52px;margin-bottom:14px;}
+.wifi-icon path{animation:wifiScan 2.2s ease-in-out infinite;}
+.wifi-icon path.arc2{animation-delay:.25s;}
+.wifi-icon circle{animation:wifiScan 2.2s ease-in-out infinite;animation-delay:.5s;}
+@keyframes wifiScan{0%,100%{opacity:.35;}50%{opacity:1;}}
+.connect-msg{
+  text-align:center;font-size:15px;line-height:1.5;color:var(--white);
+  max-width:300px;margin:0 0 24px;
+}
+.connect-msg .ssid{
+  font-family:var(--font-mono);color:var(--cyan-bright);background:rgba(102,252,241,0.1);
+  padding:1px 6px;border:1px solid rgba(102,252,241,.4);
+}
+.ip-label{font-size:11px;letter-spacing:2px;color:var(--dim);text-transform:uppercase;align-self:flex-start;margin-bottom:6px;}
+.ip-input{
+  width:100%;background:rgba(0,0,0,.35);border:1px solid var(--cyan);
+  color:var(--cyan-bright);font-family:var(--font-mono);font-size:16px;
+  padding:11px 12px;margin-bottom:24px;letter-spacing:1px;
+}
+.ip-input:focus{outline:2px solid var(--cyan-bright);outline-offset:2px;border-color:var(--cyan-bright);}
+
+/* ====================================================== */
+/* DASHBOARD                                                */
+/* ====================================================== */
+#screen-dashboard{display:flex;flex-direction:column;padding:10px clamp(8px,2vw,24px);}
+
+.sensor-bar{
+  flex:0 0 auto;display:flex;width:100%;max-width:1100px;align-self:center;
+  background:linear-gradient(180deg, rgba(69,162,158,0.10), rgba(16,23,26,0.55));
+  border:1px solid rgba(102,252,241,.3);
+  margin-bottom:clamp(8px,2vh,18px);
+}
+#screen-dashboard.active .sensor-bar{animation:bootIn .55s ease both;}
+.sensor-seg{
+  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:8px 4px;border-right:1px solid rgba(102,252,241,.18);
+  position:relative;
+}
+.sensor-seg:last-child{border-right:none;}
+.seg-label{font-size:10px;letter-spacing:2px;color:var(--dim);text-transform:uppercase;font-family:var(--font-body);}
+.seg-value{font-family:var(--font-mono);font-size:clamp(14px,2.4vmin,20px);color:var(--cyan-bright);margin-top:3px;text-shadow:0 0 8px rgba(102,252,241,.4);}
+.seg-value.clear{color:var(--safe);text-shadow:0 0 8px rgba(61,255,160,.5);}
+.seg-value.obstacle{color:var(--danger);text-shadow:0 0 10px rgba(255,59,59,.7);animation:obstaclePulse 1s ease-in-out infinite;}
+@keyframes obstaclePulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+
+.main-row{
+  flex:1;display:flex;align-items:center;justify-content:center;gap:clamp(10px,3vw,48px);
+  max-width:1100px;width:100%;align-self:center;min-height:0;
+}
+.col{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;}
+#screen-dashboard.active .col-left{animation:bootIn .55s .08s ease both;}
+#screen-dashboard.active .col-center{animation:bootIn .55s .16s ease both;}
+#screen-dashboard.active .col-right{animation:bootIn .55s .24s ease both;}
+@keyframes bootIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+
+.panel-label{font-size:11px;letter-spacing:3px;color:var(--dim);text-transform:uppercase;}
+
+#joystick{touch-action:none;cursor:pointer;width:clamp(120px,30vmin,170px);height:clamp(120px,30vmin,170px);}
+
+/* camera viewfinder - signature element with optics corner brackets */
+.camera-frame{
+  position:relative;width:clamp(190px,46vmin,340px);aspect-ratio:2/1;
+  background:#000;border:1px solid rgba(102,252,241,.35);
+  display:flex;align-items:center;justify-content:center;overflow:hidden;
+}
+.camera-frame img{width:100%;height:100%;object-fit:cover;display:block;}
+.cam-label{
+  position:absolute;top:6px;left:8px;font-family:var(--font-mono);font-size:11px;
+  letter-spacing:2px;color:var(--cyan-bright);z-index:2;text-shadow:0 0 6px rgba(102,252,241,.7);
+}
+.cam-fallback{
+  position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+  font-family:var(--font-mono);font-size:12px;letter-spacing:2px;color:var(--dim);
+}
+.corner{position:absolute;width:16px;height:16px;border:2px solid var(--cyan-bright);filter:drop-shadow(0 0 4px rgba(102,252,241,.8));z-index:2;}
+.corner.tl{top:-2px;left:-2px;border-right:none;border-bottom:none;}
+.corner.tr{top:-2px;right:-2px;border-left:none;border-bottom:none;}
+.corner.bl{bottom:-2px;left:-2px;border-right:none;border-top:none;}
+.corner.br{bottom:-2px;right:-2px;border-left:none;border-top:none;}
+
+.led-row{display:flex;gap:clamp(6px,1.6vw,14px);}
+.led-btn{
+  font-family:var(--font-display);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;
+  color:var(--dim);background:rgba(16,23,26,.6);border:1px solid var(--cyan);
+  padding:9px 14px;cursor:pointer;transition:all .18s ease;
+}
+.led-btn:active{transform:scale(.94);}
+.led-btn.on{
+  color:#fff;border-color:var(--orange);background:rgba(255,111,0,.15);
+  filter:drop-shadow(0 0 10px rgba(255,111,0,.75));
+}
+.led-btn:focus-visible{outline:2px solid var(--cyan-bright);outline-offset:3px;}
+
+.slider-wrap{width:54px;height:clamp(110px,28vmin,170px);display:flex;align-items:center;justify-content:center;touch-action:none;}
+#servo-slider{
+  -webkit-appearance:none;appearance:none;background:transparent;cursor:pointer;
+  width:clamp(110px,28vmin,170px);
+  transform:rotate(-90deg);
+}
+#servo-slider::-webkit-slider-runnable-track{
+  height:6px;background:linear-gradient(90deg, rgba(69,162,158,.3), var(--cyan-bright));
+  box-shadow:0 0 8px rgba(102,252,241,.6);
+}
+#servo-slider::-webkit-slider-thumb{
+  -webkit-appearance:none;width:22px;height:22px;margin-top:-8px;
+  background:var(--cyan-bright);border:2px solid #fff;
+  box-shadow:0 0 12px rgba(102,252,241,.9);
+}
+#servo-slider::-moz-range-track{height:6px;background:linear-gradient(90deg, rgba(69,162,158,.3), var(--cyan-bright));}
+#servo-slider::-moz-range-thumb{
+  width:18px;height:18px;background:var(--cyan-bright);border:2px solid #fff;border-radius:0;
+  box-shadow:0 0 12px rgba(102,252,241,.9);
+}
+.servo-readout{font-family:var(--font-mono);font-size:clamp(16px,2.6vmin,22px);color:var(--cyan-bright);text-shadow:0 0 8px rgba(102,252,241,.5);}
+
+/* ---------- rotate-device overlay ---------- */
+.rotate-overlay{
+  display:none;position:fixed;inset:0;z-index:50;background:rgba(11,12,16,.94);
+  flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center;
+}
+.rotate-overlay svg{width:54px;height:54px;animation:rotateSpin 1.8s linear infinite;}
+@keyframes rotateSpin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+.rotate-overlay p{font-family:var(--font-display);font-size:13px;letter-spacing:2px;color:var(--cyan-bright);max-width:240px;}
+@media (orientation:portrait){
+  body.on-dashboard .rotate-overlay{display:flex;}
+}
+</style>
 </head>
 <body>
-  <h2>ESP32 Camera Viewer</h2>
-  <div class="ip">ESP IP: <span id="ip"></span></div>
-  <div id="status"></div>
-  <img id="stream" src="/stream" alt="Live Stream" onerror="this.style.display='none'; document.getElementById('status').innerHTML='<p class=error>Camera not connected or stream unavailable.</p>'">
-  <br>
-  <button onclick="location.href='/capture'">Take Snapshot</button>
-  <script>
-    document.getElementById('ip').textContent = window.location.hostname;
-    var img = document.getElementById('stream');
-    img.onload = function(){ document.getElementById('status').innerHTML = ''; };
-  </script>
+<div class="grid-overlay"></div>
+<div id="app">
+  <section id="screen-landing" class="screen active">
+    <div class="landing-inner">
+      <svg class="logo-svg" viewBox="0 0 200 200" role="img" aria-label="Robot gear logo">
+        <defs>
+          <radialGradient id="logoGrad" cx="50%" cy="38%" r="65%">
+            <stop offset="0%" stop-color="#BFFFFA"/>
+            <stop offset="45%" stop-color="#66FCF1"/>
+            <stop offset="100%" stop-color="#11403D"/>
+          </radialGradient>
+        </defs>
+        <g>
+          <circle cx="100" cy="100" r="62" fill="none" stroke="url(#logoGrad)" stroke-width="9"/>
+          <g fill="url(#logoGrad)">
+            <rect x="93" y="16" width="14" height="22"/>
+            <rect x="93" y="162" width="14" height="22"/>
+            <rect x="16" y="93" width="22" height="14"/>
+            <rect x="162" y="93" width="22" height="14"/>
+            <g transform="rotate(45 100 100)">
+              <rect x="93" y="16" width="14" height="22"/>
+              <rect x="93" y="162" width="14" height="22"/>
+              <rect x="16" y="93" width="22" height="14"/>
+              <rect x="162" y="93" width="22" height="14"/>
+            </g>
+          </g>
+          <circle cx="100" cy="100" r="40" fill="#0B0C10" stroke="url(#logoGrad)" stroke-width="3"/>
+          <line x1="100" y1="60" x2="100" y2="46" stroke="url(#logoGrad)" stroke-width="3"/>
+          <circle cx="100" cy="42" r="5" fill="url(#logoGrad)"/>
+          <circle cx="84" cy="98" r="7" fill="url(#logoGrad)"/>
+          <circle cx="116" cy="98" r="7" fill="url(#logoGrad)"/>
+          <rect x="81" y="118" width="38" height="5" fill="url(#logoGrad)"/>
+        </g>
+      </svg>
+      <h1 class="title">BOT CONTROLLER</h1>
+      <p class="subtitle">Wireless Command Center</p>
+      <button id="btn-connect" class="btn-primary chamfer">Connect to Robot</button>
+      <p class="credit">by TheAPIcalypse</p>
+    </div>
+  </section>
+  <section id="screen-connect" class="screen">
+    <div class="connect-card chamfer">
+      <svg class="wifi-icon" viewBox="0 0 100 80" role="img" aria-label="WiFi icon">
+        <circle cx="50" cy="64" r="5" fill="#66FCF1"/>
+        <path class="arc1" d="M30 50 Q50 30 70 50" stroke="#66FCF1" stroke-width="5" fill="none" stroke-linecap="round"/>
+        <path class="arc2" d="M15 32 Q50 0 85 32" stroke="#45A29E" stroke-width="5" fill="none" stroke-linecap="round"/>
+      </svg>
+      <p class="connect-msg">Make sure your device is connected to the <span class="ssid">DongiBaba</span> network</p>
+      <label class="ip-label" for="ip-input">Robot IP Address</label>
+      <input type="text" id="ip-input" class="ip-input" value="192.168.1.100" inputmode="decimal" autocomplete="off" />
+      <button id="btn-connected" class="btn-primary chamfer">I'm Connected</button>
+    </div>
+  </section>
+  <section id="screen-dashboard" class="screen">
+    <div class="sensor-bar chamfer">
+      <div class="sensor-seg"><span class="seg-label">Temp</span><span id="val-temp" class="seg-value">--.-&deg;C</span></div>
+      <div class="sensor-seg"><span class="seg-label">Humidity</span><span id="val-hum" class="seg-value">--.-%</span></div>
+      <div class="sensor-seg"><span class="seg-label">Distance</span><span id="val-dist" class="seg-value">--.- cm</span></div>
+      <div class="sensor-seg"><span class="seg-label">Status</span><span id="val-status" class="seg-value">STANDBY</span></div>
+    </div>
+    <div class="main-row">
+      <div class="col col-left">
+        <div class="panel-label">Movement</div>
+        <canvas id="joystick" width="170" height="170" aria-label="Movement joystick"></canvas>
+      </div>
+      <div class="col col-center">
+        <div class="camera-frame">
+          <span class="cam-label">CAM</span>
+          <span class="corner tl"></span><span class="corner tr"></span>
+          <span class="corner bl"></span><span class="corner br"></span>
+          <img id="cam-stream" alt="Robot camera stream" />
+          <div id="cam-fallback" class="cam-fallback">NO FEED</div>
+        </div>
+        <div class="led-row">
+          <button class="led-btn chamfer" data-led="front">Front</button>
+          <button class="led-btn chamfer" data-led="rear">Rear</button>
+          <button class="led-btn chamfer" data-led="left">Left</button>
+          <button class="led-btn chamfer" data-led="right">Right</button>
+        </div>
+      </div>
+      <div class="col col-right">
+        <div class="panel-label">Servo</div>
+        <div class="slider-wrap">
+          <input type="range" id="servo-slider" min="0" max="180" value="90" aria-label="Servo angle" />
+        </div>
+        <div id="servo-value" class="servo-readout">90&deg;</div>
+      </div>
+    </div>
+  </section>
+</div>
+<div class="rotate-overlay" id="rotate-overlay">
+  <svg viewBox="0 0 24 24" fill="none" stroke="#66FCF1" stroke-width="2">
+    <path d="M3 12a9 9 0 1 1 3 6.7" stroke-linecap="round"/>
+    <path d="M3 19v-5h5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  <p>ROTATE DEVICE FOR OPTIMAL CONTROL</p>
+</div>
+<script>
+(function(){
+  var ROBOT_IP = window.location.hostname;
+  var BASE = window.location.origin;
+  var pollHandle = null;
+  var lastMoveSent = 0, lastServoSent = 0;
+  var ledMap = { front:"L1", rear:"L2", left:"L3", right:"L4" };
+  var ledState = { front:0, rear:0, left:0, right:0 };
+
+  function $(id){ return document.getElementById(id); }
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+  function showScreen(id){
+    document.querySelectorAll(".screen").forEach(el => el.classList.remove("active"));
+    $(id).classList.add("active");
+  }
+
+  function sendCommand(cmd){
+    fetch("/cmd?c=" + encodeURIComponent(cmd)).catch(function(){});
+  }
+
+  $("btn-connect").addEventListener("click", function(){ showScreen("screen-connect"); });
+  $("btn-connected").addEventListener("click", function(){
+    var typed = $("ip-input").value.trim();
+    if (typed && typed !== "192.168.1.100") { ROBOT_IP = typed; BASE = "http://" + ROBOT_IP; }
+    var img = $("cam-stream");
+    var fallback = $("cam-fallback");
+    img.style.display = "block";
+    fallback.style.display = "none";
+    img.src = BASE + "/stream";
+    document.body.classList.add("on-dashboard");
+    showScreen("screen-dashboard");
+    if (!pollHandle){
+      updateSensors();
+      pollHandle = setInterval(updateSensors, 500);
+    }
+  });
+
+  $("cam-stream").addEventListener("error", function(){
+    this.style.display = "none";
+    $("cam-fallback").style.display = "flex";
+  });
+
+  function updateSensors(){
+    fetch("/sensors")
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        $("val-temp").textContent = Number(data.temp).toFixed(1) + "\u00B0C";
+        $("val-hum").textContent  = Number(data.hum).toFixed(1) + "%";
+        $("val-dist").textContent = Number(data.dist).toFixed(1) + " cm";
+        var statusEl = $("val-status");
+        statusEl.classList.remove("clear","obstacle");
+        if (Number(data.ir) === 1){
+          statusEl.textContent = "CLEAR";
+          statusEl.classList.add("clear");
+        } else {
+          statusEl.textContent = "OBSTACLE";
+          statusEl.classList.add("obstacle");
+        }
+      })
+      .catch(function(){
+        var statusEl = $("val-status");
+        statusEl.textContent = "NO SIGNAL";
+        statusEl.classList.remove("clear","obstacle");
+      });
+  }
+
+  var canvas = $("joystick");
+  var ctx = canvas.getContext("2d");
+  var JC = { x: canvas.width/2, y: canvas.height/2 };
+  var JR = canvas.width/2 - 22;
+  var knob = { x: JC.x, y: JC.y };
+  var dragging = false;
+
+  function drawJoystick(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.beginPath(); ctx.arc(JC.x, JC.y, JR, 0, Math.PI*2);
+    ctx.strokeStyle = "rgba(69,162,158,0.6)"; ctx.lineWidth = 2;
+    ctx.shadowColor = "#66FCF1"; ctx.shadowBlur = 12; ctx.stroke();
+    ctx.strokeStyle = "rgba(69,162,158,0.22)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(JC.x-JR, JC.y); ctx.lineTo(JC.x+JR, JC.y);
+    ctx.moveTo(JC.x, JC.y-JR); ctx.lineTo(JC.x, JC.y+JR); ctx.stroke();
+
+    var r = dragging ? 18 : 15;
+    var grad = ctx.createRadialGradient(knob.x, knob.y, 2, knob.x, knob.y, r+6);
+    grad.addColorStop(0, "#BFFFFA"); grad.addColorStop(1, "#0B6E66");
+    ctx.beginPath(); ctx.arc(knob.x, knob.y, r, 0, Math.PI*2);
+    ctx.fillStyle = grad; ctx.shadowColor = "#66FCF1"; ctx.shadowBlur = dragging ? 22 : 14;
+    ctx.fill(); ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+
+  function canvasPos(clientX, clientY){
+    var rect = canvas.getBoundingClientRect();
+    return { x: (clientX-rect.left) * (canvas.width / rect.width),
+             y: (clientY-rect.top) * (canvas.height / rect.height) };
+  }
+
+  function queueMove(left, right){
+    var now = Date.now();
+    if (now - lastMoveSent > 80){
+      sendCommand("M " + left + " " + right);
+      lastMoveSent = now;
+    }
+  }
+
+  function moveJoystick(clientX, clientY){
+    var p = canvasPos(clientX, clientY);
+    var dx = p.x - JC.x, dy = p.y - JC.y;
+    var dist = Math.sqrt(dx*dx+dy*dy);
+    if (dist > JR){ dx = dx/dist*JR; dy = dy/dist*JR; }
+    knob.x = JC.x + dx; knob.y = JC.y + dy;
+    drawJoystick();
+    var turn = Math.round((dx/JR)*255);
+    var forward = Math.round((-dy/JR)*255);
+    queueMove(clamp(forward+turn,-255,255), clamp(forward-turn,-255,255));
+  }
+
+  function endJoystick(){
+    dragging = false;
+    knob.x = JC.x; knob.y = JC.y;
+    drawJoystick();
+    sendCommand("M 0 0");
+  }
+
+  canvas.addEventListener("pointerdown", function(e){
+    dragging = true; canvas.setPointerCapture(e.pointerId); moveJoystick(e.clientX, e.clientY);
+  });
+  canvas.addEventListener("pointermove", function(e){ if(dragging) moveJoystick(e.clientX, e.clientY); });
+  canvas.addEventListener("pointerup", endJoystick);
+  canvas.addEventListener("pointercancel", endJoystick);
+  drawJoystick();
+
+  var servoSlider = $("servo-slider");
+  var servoValue = $("servo-value");
+  function setLed(name, state){
+    if (ledState[name] === state) return;
+    ledState[name] = state;
+    sendCommand(ledMap[name] + " " + state);
+    var btn = document.querySelector('.led-btn[data-led="'+name+'"]');
+    if (btn) btn.classList.toggle("on", state === 1);
+  }
+
+  function applyServoAutomation(angle){
+    if (angle < 90){ setLed("left",1); setLed("right",0); }
+    else if (angle > 90){ setLed("left",0); setLed("right",1); }
+    else { setLed("left",0); setLed("right",0); }
+  }
+
+  function handleServoInput(angle){
+    servoValue.textContent = angle + "\u00B0";
+    applyServoAutomation(angle);
+    var now = Date.now();
+    if (now - lastServoSent > 80){
+      sendCommand("S " + angle);
+      lastServoSent = now;
+    }
+  }
+
+  servoSlider.addEventListener("input", function(e){ handleServoInput(parseInt(e.target.value, 10)); });
+  servoSlider.addEventListener("change", function(e){ sendCommand("S " + parseInt(e.target.value, 10)); });
+
+  document.querySelectorAll(".led-btn").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var name = this.dataset.led;
+      setLed(name, ledState[name] ? 0 : 1);
+    });
+  });
+})();
+</script>
 </body>
 </html>
 )rawliteral";
-  server.send(200, "text/html", html);
+
+// ==================== HTTP Handlers ====================
+void handleClient(WiFiClient &client) {
+  String request = client.readStringUntil('\r');
+  client.readStringUntil('\n');
+  if (request.startsWith("GET /sensors")) {
+    String json = getSensorJson();
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+    client.println(json);
+  } else if (request.startsWith("GET /cmd")) {
+    int idx = request.indexOf("?c=");
+    if (idx != -1) {
+      String cmd = request.substring(idx+3);
+      cmd.replace(" HTTP/1.1", "");
+      processCommand(cmd);
+    }
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\nOK");
+  } else {
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n");
+    client.write(MAIN_HTML);
+  }
 }
 
-// ==================== Camera Init ====================
-bool initCamera() {
-  camera_config_t config;
-  config.ledc_channel = LEDC_CHANNEL_0;
-  config.ledc_timer   = LEDC_TIMER_0;
-
-  config.pin_d0 = Y2_GPIO_NUM;
-  config.pin_d1 = Y3_GPIO_NUM;
-  config.pin_d2 = Y4_GPIO_NUM;
-  config.pin_d3 = Y5_GPIO_NUM;
-  config.pin_d4 = Y6_GPIO_NUM;
-  config.pin_d5 = Y7_GPIO_NUM;
-  config.pin_d6 = Y8_GPIO_NUM;
-  config.pin_d7 = Y9_GPIO_NUM;
-  config.pin_xclk  = XCLK_GPIO_NUM;
-  config.pin_pclk  = PCLK_GPIO_NUM;
-  config.pin_vsync = VSYNC_GPIO_NUM;
-  config.pin_href  = HREF_GPIO_NUM;
-  config.pin_sscb_sda = SIOD_GPIO_NUM;
-  config.pin_sscb_scl = SIOC_GPIO_NUM;
-  config.pin_pwdn  = PWDN_GPIO_NUM;
-  config.pin_reset = RESET_GPIO_NUM;
-
-  config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size   = FRAMESIZE_VGA;
-  config.jpeg_quality = 12;
-  config.fb_count     = 1;
-
-  esp_err_t err = esp_camera_init(&config);
-  if (err != ESP_OK) {
-    Serial.printf("Camera init failed: 0x%x\n", err);
-    return false;
-  }
-
-  sensor_t * s = esp_camera_sensor_get();
-  if (s) {
-    s->set_brightness(s, 0);
-    s->set_contrast(s, 0);
-    s->set_saturation(s, 0);
-    s->set_special_effect(s, 0);
-    s->set_whitebal(s, 1);
-    s->set_awb_gain(s, 1);
-    s->set_wb_mode(s, 0);
-    s->set_exposure_ctrl(s, 1);
-    s->set_aec2(s, 0);
-    s->set_gain_ctrl(s, 1);
-    s->set_agc_gain(s, 0);
-    s->set_gainceiling(s, (gainceiling_t)0);
-    s->set_bpc(s, 0);
-    s->set_wpc(s, 1);
-    s->set_raw_gma(s, 1);
-    s->set_lenc(s, 1);
-    s->set_hmirror(s, 0);
-    s->set_vflip(s, 0);
-    s->set_dcw(s, 1);
-    s->set_colorbar(s, 0);
-  }
-  return true;
-}
-
-// ==================== Setup ====================
 void setup() {
   Serial.begin(115200);
-  while (!Serial) delay(10);
-
-  if (!initCamera()) {
-    Serial.println("Camera init failed – server will start anyway.");
-  } else {
-    Serial.println("Camera ready.");
-    cameraReady = true;
-  }
+  ArduinoSerial.begin(115200, SERIAL_8N1, ARDUINO_RX, ARDUINO_TX);
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.print("\nConnecting to ");
-  Serial.println(WIFI_SSID);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.println("WiFi connected! IP: " + WiFi.localIP().toString());
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  IPAddress ip = WiFi.localIP();
-  Serial.println("\n=================================");
-  Serial.println("WiFi Connected!");
-  Serial.print("SSID: "); Serial.println(WIFI_SSID);
-  Serial.print("IP Address: "); Serial.println(ip);
-  Serial.println(cameraReady ? "Camera: READY" : "Camera: NOT AVAILABLE");
-  Serial.println("Viewer: http://" + ip.toString() + "/");
-  Serial.println("=================================");
-
-  server.on("/", handleRoot);
-  server.on("/stream", handleStream);
-  server.on("/capture", handleCapture);
   server.begin();
-  Serial.println("HTTP server started");
 }
 
 void loop() {
-  server.handleClient();
+  WiFiClient client = server.available();
+  if (client) {
+    while (client.connected()) {
+      if (client.available()) {
+        handleClient(client);
+        break;
+      }
+    }
+    client.stop();
+  }
+
+  // Read sensor data from Arduino
+  while (ArduinoSerial.available()) {
+    String line = ArduinoSerial.readStringUntil('\n');
+    if (line.startsWith("T:")) {
+      int idx1 = line.indexOf(' ', 2);
+      int idx2 = line.indexOf(' ', idx1 + 1);
+      int idx3 = line.indexOf(' ', idx2 + 1);
+      latestTemp = line.substring(2, idx1).toFloat();
+      latestHum  = line.substring(idx1 + 3, idx2).toFloat();
+      latestDist = line.substring(idx2 + 3, idx3).toFloat();
+      latestIR   = line.substring(idx3 + 3).toInt();
+    }
+  }
 }
